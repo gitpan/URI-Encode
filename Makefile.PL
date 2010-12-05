@@ -3,12 +3,13 @@ use warnings;
 use ExtUtils::MakeMaker;
 
 WriteMakefile(
-    NAME          => 'URI::Encode',
-    AUTHOR        => 'Mithun Ayachit <mithun@cpan.org>',
-    VERSION_FROM  => 'lib/URI/Encode.pm',
-    ABSTRACT_FROM => 'lib/URI/Encode.pm',
-    PL_FILES      => {},
-    PREREQ_PM     => {
+    NAME             => 'URI::Encode',
+    AUTHOR           => 'Mithun Ayachit <mithun@cpan.org>',
+    VERSION_FROM     => 'lib/URI/Encode.pm',
+    ABSTRACT_FROM    => 'lib/URI/Encode.pm',
+    PL_FILES         => {},
+    MIN_PERL_VERSION => '5.8.1',
+    PREREQ_PM        => {
         'Test::More' => 0,
         'version'    => 0,
         'Encode'     => '2.12',
