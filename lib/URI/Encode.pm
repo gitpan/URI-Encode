@@ -12,7 +12,7 @@ use Carp qw(croak carp);
 #######################
 # VERSION
 #######################
-our $VERSION = '0.061';
+our $VERSION = '0.07';
 
 #######################
 # EXPORT
@@ -27,11 +27,11 @@ our (@EXPORT_OK);
 #######################
 
 # Reserved characters
-my $reserved_re =
-    qr{([^a-zA-Z0-9\-\_\.\~\!\*\'\(\)\;\:\@\&\=\+\$\,\/\?\%\#\[\]])}x;
+my $reserved_re
+    = qr{([^a-zA-Z0-9\-\_\.\~\!\*\'\(\)\;\:\@\&\=\+\$\,\/\?\#\[\]\%])}x;
 
 # Un-reserved characters
-my $unreserved_re = qr{([^a-zA-Z0-9\Q-_.~\E])}x;
+my $unreserved_re = qr{([^a-zA-Z0-9\Q-_.~\E\%])}x;
 
 # Encoded character set
 my $encoded_chars = qr{%([a-fA-F0-9]{2})}x;
@@ -48,17 +48,22 @@ sub new {
         #   this module, unlike URI::Escape,
         #   does not encode reserved characters
         encode_reserved => 0,
+
+        #   Allow Double encoding?
+        #   defaults to YES
+        double_encode => 1,
     };
+
     if   ( ref $in[0] eq 'HASH' ) { $input = $in[0]; }
     else                          { $input = {@in}; }
 
     # Encoding Map
-    $input->{enc_map} =
-        { ( map { chr($_) => sprintf( "%%%02X", $_ ) } ( 0 ... 255 ) ) };
+    $input->{enc_map}
+        = { ( map { chr($_) => sprintf( "%%%02X", $_ ) } ( 0 ... 255 ) ) };
 
     # Decoding Map
-    $input->{dec_map} =
-        { ( map { sprintf( "%02X", $_ ) => chr($_) } ( 0 ... 255 ) ) };
+    $input->{dec_map}
+        = { ( map { sprintf( "%02X", $_ ) => chr($_) } ( 0 ... 255 ) ) };
 
     # Return
     my $self = bless $input, $class;
@@ -69,24 +74,40 @@ sub new {
 # ENCODE
 #######################
 sub encode {
-    my ( $self, $data, $reserved_flag ) = @_;
+    my ( $self, $data, $options ) = @_;
 
     # Check for data
     # Allow to be '0'
     return unless defined $data;
 
-    # Encode reserved?
-    my $enc_res = $reserved_flag || $self->{encode_reserved};
+    my $enc_res       = $self->{encode_reserved};
+    my $double_encode = $self->{double_encode};
+
+    if ( defined $options ) {
+        if ( ref $options eq 'HASH' ) {
+            $enc_res = $options->{encode_reserved}
+                if exists $options->{encode_reserved};
+            $double_encode = $options->{double_encode}
+                if exists $options->{double_encode};
+        } ## end if ( ref $options eq 'HASH')
+        else {
+            $enc_res = $options;
+        }
+    } ## end if ( defined $options )
 
     # UTF-8 encode
     $data = Encode::encode( 'utf-8-strict', $data );
 
+    # Encode a literal '%'
+    if ($double_encode) { $data =~ s{\%}{$self->_get_encoded_char($1)}gex; }
+    else { $data =~ s{(\%)}{$self->_encode_literal_percent($1, $')}gex; }
+
     # Percent Encode
     if ($enc_res) {
-        $data =~ s{$unreserved_re}{$self->{enc_map}->{$1}}gx;
+        $data =~ s{$unreserved_re}{$self->_get_encoded_char($1)}gex;
     }
     else {
-        $data =~ s{$reserved_re}{$self->{enc_map}->{$1}}gx;
+        $data =~ s{$reserved_re}{$self->_get_encoded_char($1)}gex;
     }
 
     # Done
@@ -104,7 +125,7 @@ sub decode {
     return unless defined $data;
 
     # Percent Decode
-    $data =~ s{$encoded_chars}{$self->{dec_map}->{$1}}gx;
+    $data =~ s{$encoded_chars}{ $self->_get_decoded_char($1) }gex;
 
     return $data;
 } ## end sub decode
@@ -118,6 +139,33 @@ sub uri_encode { return __PACKAGE__->new()->encode(@_); }
 
 # Decoder
 sub uri_decode { return __PACKAGE__->new()->decode(@_); }
+
+#######################
+# INTERNAL
+#######################
+
+sub _get_encoded_char {
+    my ( $self, $char ) = @_;
+    return $self->{enc_map}->{$char} if exists $self->{enc_map}->{$char};
+    return $char;
+}
+
+sub _encode_literal_percent {
+    my ( $self, $char, $post ) = @_;
+    return $self->_get_encoded_char($char) if not defined $post;
+    if ( $post =~ m{^([a-fA-F0-9]{2})}x ) {
+        return $self->_get_encoded_char($char)
+            unless exists $self->{dec_map}->{$1};
+        return $char;
+    }
+    return $self->_get_encoded_char($char);
+} ## end sub _encode_literal_percent
+
+sub _get_decoded_char {
+    my ( $self, $char ) = @_;
+    return $self->{dec_map}->{$char} if exists $self->{dec_map}->{$char};
+    return $char;
+}
 
 #######################
 1;
@@ -183,9 +231,19 @@ The following options can be passed to the constructor
 
 If true, L</"Reserved Characters"> are also encoded. Defaults to false.
 
+=item double_encode
+
+	my $encoder = URI::Encode->new({double_encode => 1});
+
+If true, characters that are already percent-encoded will not be encoded again.
+Defaults to true.
+
+    my $encoder = URI::Encode->new({double_encode => 0});
+    print $encoder->encode('http://perl.com/foo%20bar'); # prints http://perl.com/foo%20bar
+
 =back
 
-=head2 encode($url, $including_reserved)
+=head2 C<encode($url, $including_reserved)>
 
 This method encodes the URL provided. The method does not encode any
 L</"Reserved Characters"> unless C<$including_reserved> is true or set in the
@@ -195,7 +253,7 @@ encoding.
 	$uri->encode("http://perl.com/foo bar");      # http://perl.com/foo%20bar
 	$uri->encode("http://perl.com/foo bar", 1);   # http%3A%2F%2Fperl.com%2Ffoo%20bar
 
-=head2 decode($url)
+=head2 C<decode($url)>
 
 This method decodes a 'percent' encoded URL. If you had encoded the URL using
 this module (or any other method), chances are that the URL was converted to
@@ -209,13 +267,9 @@ if required.
 The following functions are exported upon request. This provides a non-OOP
 interface
 
-=head2 uri_encode($url, $including_reserved)
+=head2 C<uri_encode($url, \%options)>
 
-See L</encode($url, $including_reserved)>
-
-=head2 uri_decode($url)
-
-See L</decode($url)>
+=head2 C<uri_decode($url)>
 
 =head1 CHARACTER CLASSES
 
@@ -225,7 +279,7 @@ The following characters are considered as reserved (L<RFC
 3986|http://tools.ietf.org/html/rfc3986>). They will be encoded only if
 requested.
 
-	 ! * ' ( ) ; : @ & = + $ , / ? % # [ ]
+	 ! * ' ( ) ; : @ & = + $ , / ? # [ ]
 
 =head2 Unreserved Characters
 
